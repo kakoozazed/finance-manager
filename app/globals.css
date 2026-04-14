@@ -1,26 +1,224 @@
+/* app/globals.css - Tailwind CSS v4 compatible */
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/* Custom theme variables */
+@theme {
+  /* Custom colors */
+  --color-brown-50: #fdf8f6;
+  --color-brown-100: #f2e8e5;
+  --color-brown-200: #eaddd7;
+  --color-brown-300: #e0cec7;
+  --color-brown-400: #d2bab0;
+  --color-brown-500: #8B4513;
+  --color-brown-600: #6B3410;
+  --color-brown-700: #4A2308;
+  --color-brown-800: #3a1b06;
+  --color-brown-900: #2a1304;
+  
+  /* Custom animations */
+  --animate-fade-in: fadeIn 0.3s ease-out;
+  --animate-slide-in: slideIn 0.3s ease-out;
+  --animate-pulse-slow: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  
+  /* Custom shadows */
+  --shadow-soft: 0 2px 4px 0 rgba(0, 0, 0, 0.05);
+  --shadow-medium: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --shadow-hard: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+/* Custom keyframes */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 
+@keyframes slideIn {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* Custom utilities */
+@utility bg-brown-500 {
+  background-color: var(--color-brown-500);
+}
+
+@utility bg-brown-600 {
+  background-color: var(--color-brown-600);
+}
+
+@utility bg-brown-700 {
+  background-color: var(--color-brown-700);
+}
+
+@utility text-brown-500 {
+  color: var(--color-brown-500);
+}
+
+@utility animate-fade-in {
+  animation: var(--animate-fade-in);
+}
+
+@utility animate-slide-in {
+  animation: var(--animate-slide-in);
+}
+
+@utility animate-pulse-slow {
+  animation: var(--animate-pulse-slow);
+}
+
+@utility scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@utility truncate-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+@utility truncate-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Custom components using @layer */
+@layer components {
+  .btn-primary {
+    background-color: var(--color-emerald-600);
+    color: white;
+    padding: 0.5rem 1rem;
+    border-radius: 0.5rem;
+    transition-property: background-color;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+    transition-duration: 150ms;
+  }
+  
+  .btn-primary:hover {
+    background-color: var(--color-emerald-700);
+  }
+  
+  .btn-secondary {
+    background-color: var(--color-gray-100);
+    color: var(--color-gray-700);
+    padding: 0.5rem 1rem;
+    border-radius: 0.5rem;
+    transition-property: background-color;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+    transition-duration: 150ms;
+  }
+  
+  .btn-secondary:hover {
+    background-color: var(--color-gray-200);
+  }
+  
+  .card {
+    background-color: white;
+    border-radius: 0.5rem;
+    border: 1px solid var(--color-gray-200);
+    box-shadow: var(--shadow-soft);
+    transition-property: box-shadow;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+    transition-duration: 150ms;
+  }
+  
+  .card:hover {
+    box-shadow: var(--shadow-medium);
+  }
+  
+  .input {
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--color-gray-300);
+    border-radius: 0.5rem;
+    transition-property: outline, ring;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+    transition-duration: 150ms;
+  }
+  
+  .input:focus {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+    --tw-ring-color: var(--color-emerald-500);
+    --tw-ring-offset-width: 2px;
+    border-color: transparent;
+  }
+  
+  .label {
+    display: block;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--color-gray-700);
+    margin-bottom: 0.25rem;
+  }
+}
+
+/* Custom scrollbar (requires @reference if used in components) */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-gray-300) var(--color-gray-100);
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: var(--color-gray-100);
+  border-radius: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--color-gray-300);
+  border-radius: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--color-gray-400);
+}
+
+/* Base body styles */
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: var(--color-gray-50);
+  color: var(--color-gray-900);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* app/globals.css - Add this */
+
+/* Disable animations when no-animations class is present */
+.no-animations,
+.no-animations *,
+.no-animations *::before,
+.no-animations *::after {
+  transition: none !important;
+  animation: none !important;
 }
