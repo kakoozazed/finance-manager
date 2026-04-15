@@ -15,15 +15,12 @@ import {
   CheckCircle,
   Clock,
   AlertCircle,
-  PieChart,
   Wallet,
   X,
   Check,
   Shield,
-  AlertTriangle,
   Download,
   ArrowUpCircle,
-  ArrowDownCircle,
   Info,
   CheckCheck,
   XCircle,
@@ -41,7 +38,6 @@ export default function CashMovementsPage() {
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
   const [showFilters, setShowFilters] = useState(false);
   const [showDepositModal, setShowDepositModal] = useState(false);
-  const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage] = useState(15);
   const [selectedTransaction, setSelectedTransaction] = useState(null);
@@ -71,14 +67,6 @@ export default function CashMovementsPage() {
     reference: '',
     notes: '',
     deposit_method: 'CASH',
-  });
-
-  const [paymentForm, setPaymentForm] = useState({
-    amount: '',
-    reference: '',
-    notes: '',
-    payment_method: 'CASH',
-    recipient: '',
   });
 
   const showToast = useCallback((message, type = 'success') => {
@@ -197,11 +185,7 @@ export default function CashMovementsPage() {
       .reduce((sum, t) => sum + Number(t.amount || 0), 0);
 
     const outflows = rows
-      .filter(
-        (t) =>
-          (t.transaction_type === 'withdrawal' || t.transaction_type === 'expense') &&
-          t.status === 'confirmed'
-      )
+      .filter((t) => (t.transaction_type === 'withdrawal' || t.transaction_type === 'expense') && t.status === 'confirmed')
       .reduce((sum, t) => sum + Number(t.amount || 0), 0);
 
     const pending = rows.filter((t) => t.status === 'pending').length;
@@ -304,68 +288,9 @@ export default function CashMovementsPage() {
     }
   };
 
-  const handlePayment = async () => {
-    if (!validateAmount(paymentForm.amount)) return;
-
-    const currentBalanceValue = Number(cashBalance?.current_balance || 0);
-    const paymentAmount = parseFloat(paymentForm.amount);
-
-    if (paymentAmount > currentBalanceValue) {
-      showToast('Insufficient balance for this payment', 'error');
-      return;
-    }
-
-    setProcessing(true);
-
-    try {
-      const transactionReference = paymentForm.reference.trim() || `PMT-${Date.now()}`;
-
-      let paymentNotes = '';
-      if (paymentForm.notes?.trim()) {
-        paymentNotes = paymentForm.notes.trim();
-      } else if (paymentForm.recipient?.trim()) {
-        paymentNotes = `Payment to ${paymentForm.recipient.trim()} via ${paymentForm.payment_method}`;
-      } else {
-        paymentNotes = `Payment via ${paymentForm.payment_method}`;
-      }
-
-      const { error } = await supabase.from('finance_cash_transactions').insert([
-        {
-          transaction_type: 'expense',
-          amount: paymentAmount,
-          balance_after: currentBalanceValue,
-          reference: transactionReference,
-          notes: paymentNotes,
-          created_by: currentUser?.email || 'system',
-          status: 'pending',
-        },
-      ]);
-
-      if (error) throw error;
-
-      showToast('Payment recorded successfully and is waiting confirmation.', 'success');
-      setShowPaymentModal(false);
-      setPaymentForm({
-        amount: '',
-        reference: '',
-        notes: '',
-        payment_method: 'CASH',
-        recipient: '',
-      });
-
-      await fetchTransactions();
-    } catch (error) {
-      showToast(error.message || 'Error recording payment', 'error');
-    } finally {
-      setProcessing(false);
-    }
-  };
-
   const handleConfirmTransaction = async (transaction) => {
-    const action = transaction.transaction_type === 'deposit' ? 'deposit' : 'payment';
-
     const ok = confirm(
-      `Confirm this ${action} of ${formatUGX(
+      `Confirm this deposit of ${formatUGX(
         transaction.amount
       )}?\n\nThis will update the cash balance immediately.`
     );
@@ -385,7 +310,7 @@ export default function CashMovementsPage() {
       if (error) throw error;
 
       if (data?.success) {
-        showToast(`${action.charAt(0).toUpperCase() + action.slice(1)} confirmed successfully.`, 'success');
+        showToast('Deposit confirmed successfully.', 'success');
       } else {
         showToast(data?.message || 'Confirmation failed', 'error');
       }
@@ -571,7 +496,7 @@ export default function CashMovementsPage() {
                 Cash Movements
               </h1>
               <p className="text-sm text-gray-500 mt-1">
-                Any logged-in user can now confirm pending cash transactions
+                Deposit recording and confirmation only
               </p>
               <div className="mt-2 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 text-blue-700 text-xs font-medium border border-blue-200">
                 <Shield size={12} />
@@ -586,14 +511,6 @@ export default function CashMovementsPage() {
               >
                 <ArrowUpCircle size={18} />
                 Record Deposit
-              </button>
-
-              <button
-                onClick={() => setShowPaymentModal(true)}
-                className="flex items-center gap-2 px-5 py-2.5 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 transition-all shadow-md hover:shadow-lg"
-              >
-                <ArrowDownCircle size={18} />
-                Record Payment
               </button>
 
               <button
@@ -663,7 +580,7 @@ export default function CashMovementsPage() {
                 <TrendingDown size={22} className="text-red-600" />
               </div>
             </div>
-            <p className="text-xs text-red-600 mt-3">Confirmed payments</p>
+            <p className="text-xs text-red-600 mt-3">Historical withdrawals/expenses</p>
           </div>
 
           <div className="bg-gradient-to-br from-blue-600 to-indigo-600 rounded-xl p-5 shadow-lg">
@@ -690,7 +607,7 @@ export default function CashMovementsPage() {
                 <div>
                   <h2 className="text-lg font-semibold text-gray-900">Pending Confirmation Queue</h2>
                   <p className="text-sm text-gray-600">
-                    Any logged-in user can confirm or reject these transactions
+                    Confirm or reject submitted deposits
                   </p>
                 </div>
               </div>
@@ -724,19 +641,8 @@ export default function CashMovementsPage() {
                       className="rounded-xl border border-gray-200 p-5 bg-white shadow-sm hover:shadow-md transition-shadow"
                     >
                       <div className="flex items-start gap-3">
-                        <div
-                          className={`p-3 rounded-xl ${
-                            transaction.transaction_type === 'deposit' ? 'bg-emerald-50' : 'bg-red-50'
-                          }`}
-                        >
-                          <TypeIcon
-                            size={20}
-                            className={
-                              transaction.transaction_type === 'deposit'
-                                ? 'text-emerald-600'
-                                : 'text-red-600'
-                            }
-                          />
+                        <div className={`p-3 rounded-xl bg-emerald-50`}>
+                          <TypeIcon size={20} className="text-emerald-600" />
                         </div>
 
                         <div className="flex-1">
@@ -748,15 +654,8 @@ export default function CashMovementsPage() {
                             </span>
                           </div>
 
-                          <p
-                            className={`text-2xl font-bold mt-2 ${
-                              transaction.transaction_type === 'deposit'
-                                ? 'text-emerald-600'
-                                : 'text-red-600'
-                            }`}
-                          >
-                            {transaction.transaction_type === 'deposit' ? '+' : '-'}{' '}
-                            {formatUGX(transaction.amount)}
+                          <p className="text-2xl font-bold mt-2 text-emerald-600">
+                            + {formatUGX(transaction.amount)}
                           </p>
 
                           <div className="mt-3 space-y-1 text-sm text-gray-600">
@@ -1172,7 +1071,7 @@ export default function CashMovementsPage() {
                 <div className="flex items-start gap-2">
                   <Info size={16} className="text-blue-600 mt-0.5" />
                   <p className="text-xs text-blue-700">
-                    This deposit will be saved as pending until any logged-in user confirms it.
+                    This deposit will be saved as pending until a logged-in user confirms it.
                   </p>
                 </div>
               </div>
@@ -1193,111 +1092,6 @@ export default function CashMovementsPage() {
               >
                 {processing ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
                 Submit Deposit
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showPaymentModal && (
-        <div
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 animate-fade-in"
-          onClick={() => setShowPaymentModal(false)}
-        >
-          <div
-            className="bg-white rounded-xl max-w-md w-full max-h-[90vh] overflow-y-auto animate-scale-in"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="p-6 border-b border-gray-100">
-              <div className="flex items-center justify-between">
-                <h3 className="text-lg font-semibold text-gray-900">Record Payment</h3>
-                <button
-                  onClick={() => setShowPaymentModal(false)}
-                  className="text-gray-400 hover:text-gray-600 transition-colors"
-                >
-                  <X size={20} />
-                </button>
-              </div>
-            </div>
-
-            <div className="p-6 space-y-4">
-              <div className="bg-gray-50 rounded-lg p-3 mb-2">
-                <p className="text-xs text-gray-500">Available Balance</p>
-                <p className="text-lg font-bold text-gray-900">
-                  {formatUGX(cashBalance?.current_balance)}
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Amount (UGX) *</label>
-                <input
-                  type="number"
-                  value={paymentForm.amount}
-                  onChange={(e) => setPaymentForm({ ...paymentForm, amount: e.target.value })}
-                  placeholder="Enter amount"
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
-                  autoFocus
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Recipient (Optional)</label>
-                <input
-                  type="text"
-                  value={paymentForm.recipient}
-                  onChange={(e) => setPaymentForm({ ...paymentForm, recipient: e.target.value })}
-                  placeholder="Recipient name"
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Reference (Optional)</label>
-                <input
-                  type="text"
-                  value={paymentForm.reference}
-                  onChange={(e) => setPaymentForm({ ...paymentForm, reference: e.target.value })}
-                  placeholder="Reference number"
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Notes (Optional)</label>
-                <textarea
-                  value={paymentForm.notes}
-                  onChange={(e) => setPaymentForm({ ...paymentForm, notes: e.target.value })}
-                  rows={3}
-                  placeholder="Payment reason or additional notes..."
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
-                />
-              </div>
-
-              <div className="bg-amber-50 rounded-lg p-3">
-                <div className="flex items-start gap-2">
-                  <AlertCircle size={16} className="text-amber-600 mt-0.5" />
-                  <p className="text-xs text-amber-700">
-                    This payment will be saved as pending until any logged-in user confirms it.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="p-6 border-t border-gray-100 flex gap-3">
-              <button
-                onClick={() => setShowPaymentModal(false)}
-                className="flex-1 px-4 py-2 border border-gray-200 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
-              >
-                Cancel
-              </button>
-
-              <button
-                onClick={handlePayment}
-                disabled={processing || !paymentForm.amount}
-                className="flex-1 bg-red-600 text-white py-2 rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-colors"
-              >
-                {processing ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
-                Submit Payment
               </button>
             </div>
           </div>
