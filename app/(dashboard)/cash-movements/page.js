@@ -1,4 +1,3 @@
-// app/(dashboard)/cash-movements/page.js
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -98,27 +97,24 @@ export default function CashMovementsPage() {
 
     const fetchUserRole = async () => {
         if (!currentUser) return;
-        
+
         try {
-            // Query using user_id
             const { data, error } = await supabase
                 .from('user_roles')
                 .select('*')
                 .eq('user_id', currentUser.id)
                 .maybeSingle();
-            
+
             console.log('User role query result:', data, error);
-            
+
             if (!error && data) {
                 setUserRole(data);
-                // Check if user can approve
                 const canApproveRoles = ['admin', 'finance_manager', 'accountant', 'finance_assistant'];
                 const hasApprovePermission = canApproveRoles.includes(data.role) || data.can_approve_transactions === true;
                 setCanApprove(hasApprovePermission);
                 console.log('Can approve:', hasApprovePermission, 'Role:', data.role);
             } else {
                 console.log('No role found for user');
-                // If no role found, try to add as admin (for testing)
                 const { data: newRole, error: insertError } = await supabase
                     .from('user_roles')
                     .insert([{
@@ -130,7 +126,7 @@ export default function CashMovementsPage() {
                     }])
                     .select()
                     .single();
-                
+
                 if (!insertError && newRole) {
                     console.log('Created admin role for user');
                     setUserRole(newRole);
@@ -276,7 +272,7 @@ export default function CashMovementsPage() {
         setProcessing(true);
         try {
             const transactionReference = depositForm.reference || `DEPOSIT-${Date.now()}`;
-            
+
             const { error: transactionError } = await supabase
                 .from('finance_cash_transactions')
                 .insert([{
@@ -301,6 +297,7 @@ export default function CashMovementsPage() {
                 deposit_method: 'CASH'
             });
             fetchTransactions();
+            fetchCashBalance();
         } catch (error) {
             alert('Error recording deposit: ' + error.message);
         } finally {
@@ -310,34 +307,25 @@ export default function CashMovementsPage() {
 
     const handleConfirmTransaction = async (transaction) => {
         const action = transaction.transaction_type === 'CASH_IN' ? 'deposit' : 'payment';
-        
+
         const confirmMessage = `You are about to approve this ${action} of ${formatUGX(transaction.amount)}.\n\nThis will update the cash balance immediately.\n\nDo you want to proceed?`;
-        
+
         if (!confirm(confirmMessage)) return;
 
         setApprovingId(transaction.id);
         setProcessing(true);
-        
+
         try {
             console.log('Approving transaction:', transaction.id);
-            
-            // Calculate new balance after approval
-            let newBalance = cashBalance?.current_balance || 0;
-            if (transaction.transaction_type === 'CASH_IN') {
-                newBalance += transaction.amount;
-            } else {
-                newBalance -= transaction.amount;
-            }
-            
-            // Update transaction status to confirmed
+
+            // Only update transaction status - let the database trigger handle the balance update
             const { error: updateError } = await supabase
                 .from('finance_cash_transactions')
                 .update({
                     status: 'confirmed',
                     confirmed_by: currentUser?.email,
                     confirmed_at: new Date().toISOString(),
-                    approval_role: userRole?.role,
-                    balance_after: newBalance
+                    approval_role: userRole?.role
                 })
                 .eq('id', transaction.id);
 
@@ -345,26 +333,17 @@ export default function CashMovementsPage() {
                 console.error('Update error:', updateError);
                 throw updateError;
             }
-            
-            // Update cash balance
-            const { error: balanceError } = await supabase
-                .from('finance_cash_balance')
-                .update({
-                    current_balance: newBalance,
-                    updated_by: currentUser?.email,
-                    last_updated: new Date().toISOString()
-                })
-                .eq('singleton', true);
 
-            if (balanceError) {
-                console.error('Balance update error:', balanceError);
-                // Don't throw, transaction is approved but balance update failed
-                alert('Transaction approved but balance update failed. Please check records.');
-            }
-            
+            // No manual balance update here - the trigger will handle it automatically
+
             alert(`✅ ${action.charAt(0).toUpperCase() + action.slice(1)} approved successfully!`);
-            fetchTransactions();
-            fetchCashBalance();
+
+            // Refresh data after a short delay to ensure trigger has completed
+            setTimeout(() => {
+                fetchTransactions();
+                fetchCashBalance();
+            }, 500);
+
         } catch (error) {
             console.error('Approval error:', error);
             alert('Error approving transaction: ' + error.message);
@@ -379,7 +358,7 @@ export default function CashMovementsPage() {
 
         setApprovingId(transaction.id);
         setProcessing(true);
-        
+
         try {
             const { error } = await supabase
                 .from('finance_cash_transactions')
@@ -387,9 +366,10 @@ export default function CashMovementsPage() {
                 .eq('id', transaction.id);
 
             if (error) throw error;
-            
+
             alert('Transaction rejected and removed!');
             fetchTransactions();
+            fetchCashBalance();
         } catch (error) {
             console.error('Rejection error:', error);
             alert('Error rejecting transaction: ' + error.message);
@@ -425,9 +405,8 @@ export default function CashMovementsPage() {
                             <p className="text-sm text-gray-500 mt-1">
                                 Monitor and manage cash transactions
                                 {userRole && (
-                                    <span className={`ml-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs ${
-                                        canApprove ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'
-                                    }`}>
+                                    <span className={`ml-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs ${canApprove ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'
+                                        }`}>
                                         <Shield size={12} />
                                         Role: {userRole.role} {canApprove ? '(Can Approve)' : '(View Only)'}
                                     </span>
@@ -561,7 +540,7 @@ export default function CashMovementsPage() {
                             </div>
                         </div>
                     </div>
-                    
+
                     {showFilters && (
                         <div className="p-4 bg-gray-50 border-t border-gray-100">
                             <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
@@ -633,22 +612,22 @@ export default function CashMovementsPage() {
                                             <td className="px-6 py-4 text-sm text-gray-600">{transaction.created_by}</td>
                                             <td className="px-6 py-4 text-center">
                                                 <div className="flex items-center justify-center gap-2">
-                                                    <button 
+                                                    <button
                                                         onClick={() => {
                                                             setSelectedTransaction(transaction);
                                                             setShowDetailsModal(true);
-                                                        }} 
-                                                        className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors" 
+                                                        }}
+                                                        className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors"
                                                         title="View Details"
                                                     >
                                                         <Eye size={16} />
                                                     </button>
-                                                    {/* Approve button - always show for pending transactions */}
-                                                    {transaction.status === 'pending' && (
-                                                        <button 
-                                                            onClick={() => handleConfirmTransaction(transaction)} 
+                                                    {/* Approve button - only show for pending transactions */}
+                                                    {transaction.status === 'pending' && canApprove && (
+                                                        <button
+                                                            onClick={() => handleConfirmTransaction(transaction)}
                                                             disabled={processing && approvingId === transaction.id}
-                                                            className="p-1.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1" 
+                                                            className="p-1.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
                                                             title="Approve Transaction"
                                                         >
                                                             {processing && approvingId === transaction.id ? (
@@ -736,7 +715,7 @@ export default function CashMovementsPage() {
                             </div>
                             <div className="bg-blue-50 rounded-lg p-3">
                                 <p className="text-xs text-blue-700">
-                                    ⓘ This deposit will be recorded as <strong>pending approval</strong>. 
+                                    ⓘ This deposit will be recorded as <strong>pending approval</strong>.
                                     You can approve it immediately using the Approve button.
                                 </p>
                             </div>
@@ -791,7 +770,7 @@ export default function CashMovementsPage() {
                             </div>
                         </div>
                         <div className="p-6 border-t border-gray-100">
-                            {selectedTransaction.status === 'pending' && (
+                            {selectedTransaction.status === 'pending' && canApprove && (
                                 <div className="flex gap-3 mb-3">
                                     <button onClick={() => {
                                         handleRejectTransaction(selectedTransaction);
