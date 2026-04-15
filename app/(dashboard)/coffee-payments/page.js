@@ -49,13 +49,26 @@ export default function CoffeePaymentsPage() {
         return { total, pending, totalAmount, paidAmount, paidCount: paid };
     }, [lots]);
 
+    // Load current user on mount
+    useEffect(() => {
+        const loadUser = async () => {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (user) {
+                setCurrentUser(user);
+            }
+        };
+        loadUser();
+    }, [supabase]);
+
     const fetchData = useCallback(async () => {
         setLoading(true);
         setError(null);
         try {
-            await fetchCurrentUser();
-            await Promise.all([fetchSuppliers(), fetchCashBalance(), fetchLots()]);
+            await fetchSuppliers();
+            await fetchCashBalance();
+            await fetchLots();
         } catch (err) {
+            console.error('Fetch error:', err);
             setError(err.message);
         } finally {
             setLoading(false);
@@ -69,11 +82,6 @@ export default function CoffeePaymentsPage() {
     useEffect(() => {
         fetchLots();
     }, [filterStatus, selectedSupplier]);
-
-    const fetchCurrentUser = async () => {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (user) setCurrentUser(user);
-    };
 
     const fetchCashBalance = async () => {
         const { data, error } = await supabase
@@ -117,7 +125,7 @@ export default function CoffeePaymentsPage() {
             const { data, error: lotsError } = await query;
             if (lotsError) throw lotsError;
 
-            // Fetch receipts and payments for each lot
+            // Fetch receipts for each lot
             const lotsWithDetails = await Promise.all(
                 (data || []).map(async (lot) => {
                     const { data: receipts } = await supabase
@@ -144,6 +152,18 @@ export default function CoffeePaymentsPage() {
         }
     };
 
+    const getCurrentUserEmail = async () => {
+        if (currentUser?.email) return currentUser.email;
+        
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user?.email) {
+            setCurrentUser(user);
+            return user.email;
+        }
+        
+        return 'system@coffeeapp.com';
+    };
+
     const processPayment = async (paymentData) => {
         if (!paymentData.payment_date) {
             alert('Please select a payment date');
@@ -151,6 +171,11 @@ export default function CoffeePaymentsPage() {
         }
 
         const netPayment = paymentData.amount_paid - (paymentData.advance_recovered || 0);
+        
+        if (netPayment <= 0) {
+            alert('Net payment amount must be greater than 0');
+            return;
+        }
         
         if (paymentData.method === 'CASH' && cashBalance < netPayment) {
             alert(`Insufficient cash balance. Available: ${formatUGX(cashBalance)}`);
@@ -160,6 +185,8 @@ export default function CoffeePaymentsPage() {
         setProcessing(true);
 
         try {
+            const userEmail = await getCurrentUserEmail();
+
             // 1. Handle GRN file upload if present
             let grnFileUrl = selectedLot.grn_file_url;
             let grnFileName = selectedLot.grn_file_name;
@@ -181,14 +208,13 @@ export default function CoffeePaymentsPage() {
             }
 
             // 2. Update the lot with GRN info and change status to PAID
-            // NOTE: paid_at and payment_reference columns don't exist in your table
             const updateData = {
                 grn_number: paymentData.grn_number,
                 batch_number: paymentData.batch_number,
                 grn_file_url: grnFileUrl,
                 grn_file_name: grnFileName,
                 finance_status: 'PAID',
-                finance_notes: `Paid on ${paymentData.payment_date} via ${paymentData.method}. Ref: ${paymentData.reference || 'N/A'}`,
+                finance_notes: `Paid on ${paymentData.payment_date} via ${paymentData.method}. Ref: ${paymentData.reference || 'N/A'}. Notes: ${paymentData.notes || ''}`,
                 updated_at: new Date().toISOString()
             };
             
@@ -219,7 +245,8 @@ export default function CoffeePaymentsPage() {
                         receipt_url: publicUrl,
                         receipt_name: file.name,
                         receipt_type: 'PAYMENT_RECEIPT',
-                        uploaded_by: currentUser?.email
+                        uploaded_by: userEmail,
+                        created_at: new Date().toISOString()
                     };
                 }));
                 
@@ -231,22 +258,25 @@ export default function CoffeePaymentsPage() {
             }
 
             // 4. Record the payment in supplier_payments table
+            const paymentRecord = {
+                lot_id: selectedLot.id,
+                supplier_id: selectedLot.supplier_id,
+                method: paymentData.method,
+                status: 'POSTED',
+                requested_by: userEmail,
+                gross_payable_ugx: selectedLot.total_amount_ugx,
+                advance_recovered_ugx: paymentData.advance_recovered || 0,
+                amount_paid_ugx: netPayment,
+                reference: paymentData.reference || `PAY-${Date.now()}`,
+                notes: paymentData.notes || '',
+                payment_date: paymentData.payment_date,
+                transaction_id: paymentData.reference || `PAY-${Date.now()}`,
+                created_at: new Date().toISOString()
+            };
+            
             const { error: paymentError } = await supabase
                 .from('supplier_payments')
-                .insert({
-                    lot_id: selectedLot.id,
-                    supplier_id: selectedLot.supplier_id,
-                    method: paymentData.method,
-                    status: 'POSTED',
-                    requested_by: currentUser?.email,
-                    gross_payable_ugx: selectedLot.total_amount_ugx,
-                    advance_recovered_ugx: paymentData.advance_recovered || 0,
-                    amount_paid_ugx: netPayment,
-                    reference: paymentData.reference || `PAY-${Date.now()}`,
-                    notes: paymentData.notes,
-                    payment_date: paymentData.payment_date,
-                    transaction_id: paymentData.reference || `PAY-${Date.now()}`
-                });
+                .insert(paymentRecord);
             
             if (paymentError) throw paymentError;
 
@@ -260,15 +290,27 @@ export default function CoffeePaymentsPage() {
                         amount: netPayment,
                         balance_after: newBalance,
                         reference: `PAYMENT-${selectedLot.id.slice(0, 8)}-${Date.now()}`,
-                        notes: `Coffee payment to ${selectedLot.suppliers?.name}`,
-                        created_by: currentUser?.email || 'system',
-                        status: 'confirmed'
+                        notes: `Coffee payment to ${selectedLot.suppliers?.name} for lot ${selectedLot.id}`,
+                        created_by: userEmail,
+                        status: 'confirmed',
+                        created_at: new Date().toISOString()
                     });
                 
                 if (transactionError) throw transactionError;
                 
                 // Update cash balance
-                await fetchCashBalance();
+                const { error: balanceUpdateError } = await supabase
+                    .from('finance_cash_balance')
+                    .update({ 
+                        current_balance: newBalance, 
+                        updated_by: userEmail,
+                        last_updated: new Date().toISOString()
+                    })
+                    .eq('singleton', true);
+                
+                if (balanceUpdateError) throw balanceUpdateError;
+                
+                setCashBalance(newBalance);
             }
 
             alert('Payment processed successfully!');
@@ -287,6 +329,7 @@ export default function CoffeePaymentsPage() {
         setProcessing(true);
         
         try {
+            const userEmail = await getCurrentUserEmail();
             const updates = {
                 grn_number: updateData.grn_number,
                 batch_number: updateData.batch_number,
@@ -331,8 +374,9 @@ export default function CoffeePaymentsPage() {
                         receipt_url: publicUrl,
                         receipt_name: file.name,
                         receipt_type: 'PAYMENT_RECEIPT',
-                        uploaded_by: currentUser?.email,
-                        notes: updateData.receipt_notes
+                        uploaded_by: userEmail,
+                        notes: updateData.receipt_notes,
+                        created_at: new Date().toISOString()
                     };
                 }));
                 
@@ -377,10 +421,11 @@ export default function CoffeePaymentsPage() {
         
         try {
             if (receiptUrl) {
-                const filePath = receiptUrl.split('/').pop();
+                const urlParts = receiptUrl.split('/');
+                const fileName = urlParts[urlParts.length - 1];
                 await supabase.storage
                     .from('payment_documents')
-                    .remove([`receipts/${filePath}`])
+                    .remove([`receipts/${fileName}`])
                     .catch(console.error);
             }
             
@@ -891,6 +936,10 @@ function PaymentModal({ lot, supplier, cashBalance, onClose, onSubmit, formatUGX
             alert('Please enter mobile money number');
             return;
         }
+        if (netPayment <= 0) {
+            alert('Net payment amount must be greater than 0');
+            return;
+        }
         onSubmit(formData);
     };
 
@@ -1315,7 +1364,7 @@ function DetailsModal({ lot, supplier, onClose, formatUGX, formatDate, onEdit, o
                                         {lot.receipts.map(receipt => (
                                             <div key={receipt.id} className="bg-gray-50 rounded-xl p-3 flex justify-between items-center">
                                                 <div className="flex items-center gap-3">
-                                                    <Image size={20} className="text-gray-500" />
+                                                    <FileText size={20} className="text-gray-500" />
                                                     <div>
                                                         <p className="font-medium text-gray-900">{receipt.receipt_name}</p>
                                                         <p className="text-xs text-gray-500">Uploaded: {formatDate(receipt.created_at)}</p>
