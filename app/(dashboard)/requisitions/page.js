@@ -31,13 +31,18 @@ import {
   TrendingUp,
   TrendingDown,
   MinusCircle,
-  Printer,
   CheckSquare,
   Users,
   Stamp,
   Receipt,
   Image,
-  AlertTriangle
+  AlertTriangle,
+  FolderPlus,
+  Edit2,
+  Save,
+  Banknote,
+  Wallet,
+  Landmark
 } from 'lucide-react';
 
 export default function RequisitionsPage() {
@@ -57,6 +62,7 @@ export default function RequisitionsPage() {
   const [userName, setUserName] = useState('');
   const [userPosition, setUserPosition] = useState('');
   const [viewMode, setViewMode] = useState('table');
+  const [refreshKey, setRefreshKey] = useState(0);
   const [stats, setStats] = useState({
     total: 0,
     document_uploaded: 0,
@@ -76,7 +82,7 @@ export default function RequisitionsPage() {
     if (userRole !== null) {
       fetchRequests();
     }
-  }, [filterStatus, filterType, filterDepartment, userRole]);
+  }, [filterStatus, filterType, filterDepartment, userRole, refreshKey]);
 
   const getUserRole = async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -210,7 +216,6 @@ export default function RequisitionsPage() {
     };
   };
 
-  // Helper function to convert empty strings to null for date fields
   const parseDate = (dateValue) => {
     if (!dateValue || dateValue === '' || dateValue === null || dateValue === undefined) {
       return null;
@@ -218,7 +223,16 @@ export default function RequisitionsPage() {
     return dateValue;
   };
 
-  const createRequisition = async (formData, stampedDocument, receipts) => {
+  const generateRequisitionNumber = () => {
+    const date = new Date();
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+    return `REQ-${year}${month}-${random}`;
+  };
+
+  // Create requisition WITHOUT payment details
+  const createRequisition = async (formData, stampedDocument) => {
     setProcessing(true);
     
     try {
@@ -228,65 +242,52 @@ export default function RequisitionsPage() {
         throw new Error('You must be logged in to create a requisition');
       }
       
-      // Upload the stamped document (required)
       if (!stampedDocument) {
         throw new Error('Please upload the stamped requisition document');
       }
       
       const stampedDocumentInfo = await uploadDocument(stampedDocument, 'requisitions');
       
-      // Upload all receipts
-      const receiptUrls = [];
-      if (receipts && receipts.length > 0) {
-        for (const receipt of receipts) {
-          const receiptInfo = await uploadDocument(receipt, 'receipts');
-          receiptUrls.push(receiptInfo);
-        }
-      }
-      
-      // Prepare the data for insertion with proper null handling for dates
       const requisitionData = {
-        // Basic information
+        requisition_number: generateRequisitionNumber(),
         title: formData.title,
         description: formData.description || null,
         type: formData.type,
         department: formData.department,
         priority: formData.priority || 'Medium',
-        
-        // Financial details
         amount: parseFloat(formData.amount),
         currency: 'UGX',
         
-        // Payment already processed (money received)
-        payment_processed: true,
-        payment_processed_at: new Date().toISOString(),
-        payment_processed_by: user.email,
-        payment_processed_by_id: user.id,
-        payment_reference_number: formData.payment_reference_number || null,
-        payment_method: formData.payment_method || 'transfer',
-        payment_notes: formData.payment_notes || null,
+        // Payment details - initially empty, can be updated later
+        payment_processed: false,
+        payment_processed_at: null,
+        payment_processed_by: null,
+        payment_processed_by_id: null,
+        payment_reference_number: null,
+        payment_method: null,
+        payment_notes: null,
         
-        // Disbursement details
-        disbursement_method: formData.disbursement_method || 'cash',
-        disbursement_phone: formData.disbursement_phone || null,
-        disbursement_bank_name: formData.disbursement_bank_name || null,
-        disbursement_account_number: formData.disbursement_account_number || null,
-        disbursement_account_name: formData.disbursement_account_name || null,
+        // Disbursement details - initially empty
+        disbursement_method: null,
+        disbursement_phone: null,
+        disbursement_bank_name: null,
+        disbursement_account_number: null,
+        disbursement_account_name: null,
         
-        // Created by (finance user)
+        // Created by
         created_by_email: user.email,
         created_by_name: userName || formData.created_by_name || user.email,
         created_by_position: userPosition || formData.created_by_position || 'Staff',
         created_by_department: formData.department,
         created_by_employee_id: user.id,
         
-        // Original requester (from physical document)
+        // Original requester
         original_requester_name: formData.original_requester_name || null,
         original_requester_position: formData.original_requester_position || null,
         original_requester_department: formData.original_requester_department || null,
         original_requester_signature_date: parseDate(formData.original_requester_signature_date),
         
-        // Approval stamps from physical document
+        // Approvals
         supervisor_approved: formData.supervisor_approved || false,
         supervisor_name: formData.supervisor_name || null,
         supervisor_position: formData.supervisor_position || null,
@@ -314,9 +315,9 @@ export default function RequisitionsPage() {
         stamped_document_type: stampedDocumentInfo.type,
         stamped_document_uploaded_at: new Date().toISOString(),
         
-        // Receipts
-        receipts: receiptUrls,
-        receipts_count: receiptUrls.length,
+        // Receipts - empty initially
+        receipts: [],
+        receipts_count: 0,
         
         // Financial coding
         budget_code: formData.budget_code || null,
@@ -324,13 +325,11 @@ export default function RequisitionsPage() {
         project_code: formData.project_code || null,
         account_code: formData.account_code || null,
         
-        // Status - since payment is already processed, go directly to Payment Processed
-        status: 'Payment Processed',
+        // Status - Document Uploaded (payment pending)
+        status: 'Document Uploaded',
         
         // Notes
         general_notes: formData.general_notes || null,
-        
-        // Metadata
         metadata: formData.metadata || {}
       };
       
@@ -346,9 +345,9 @@ export default function RequisitionsPage() {
       }
       
       setShowRequestModal(false);
-      await fetchRequests();
+      setRefreshKey(prev => prev + 1);
       
-      alert('Requisition created successfully with payment processed and receipts attached!');
+      alert('Requisition created successfully! You can now add payment details and receipts later.');
       
     } catch (error) {
       console.error('Creation error:', error);
@@ -358,31 +357,95 @@ export default function RequisitionsPage() {
     }
   };
 
-  const updatePaymentStatus = async (requestId, paymentProcessed, paymentReference = null) => {
+  // Update payment details
+  const updatePaymentDetails = async (requestId, paymentData) => {
     setProcessing(true);
     
-    const updateData = {
-      payment_processed: paymentProcessed,
-      payment_processed_at: paymentProcessed ? new Date().toISOString() : null,
-      status: paymentProcessed ? 'Payment Processed' : 'Payment Pending'
-    };
-    
-    if (paymentReference) {
-      updateData.payment_reference_number = paymentReference;
-    }
-    
-    const { error } = await supabase
-      .from('requisitions')
-      .update(updateData)
-      .eq('id', requestId);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      const updateData = {
+        payment_processed: true,
+        payment_processed_at: new Date().toISOString(),
+        payment_processed_by: user?.email,
+        payment_processed_by_id: user?.id,
+        payment_reference_number: paymentData.payment_reference_number,
+        payment_method: paymentData.payment_method,
+        payment_notes: paymentData.payment_notes || null,
+        disbursement_method: paymentData.disbursement_method,
+        disbursement_phone: paymentData.disbursement_phone || null,
+        disbursement_bank_name: paymentData.disbursement_bank_name || null,
+        disbursement_account_number: paymentData.disbursement_account_number || null,
+        disbursement_account_name: paymentData.disbursement_account_name || null,
+        status: 'Payment Processed',
+        updated_at: new Date().toISOString()
+      };
+      
+      const { error } = await supabase
+        .from('requisitions')
+        .update(updateData)
+        .eq('id', requestId);
 
-    if (error) {
-      alert('Error updating payment status: ' + error.message);
-    } else {
-      await fetchRequests();
-      alert(`Payment ${paymentProcessed ? 'processed' : 'marked as pending'} successfully!`);
+      if (error) throw new Error(error.message);
+      
+      setRefreshKey(prev => prev + 1);
+      alert('Payment details updated successfully!');
+      return true;
+      
+    } catch (error) {
+      console.error('Error updating payment:', error);
+      alert('Error updating payment details: ' + error.message);
+      return false;
+    } finally {
+      setProcessing(false);
     }
-    setProcessing(false);
+  };
+
+  // Add receipts to requisition
+  const addReceiptsToRequisition = async (requestId, newReceipts) => {
+    setProcessing(true);
+    
+    try {
+      const { data: request, error: fetchError } = await supabase
+        .from('requisitions')
+        .select('receipts, receipts_count')
+        .eq('id', requestId)
+        .single();
+      
+      if (fetchError) throw new Error('Failed to fetch requisition');
+      
+      const receiptUrls = [];
+      
+      for (const receipt of newReceipts) {
+        const receiptInfo = await uploadDocument(receipt, 'receipts');
+        receiptUrls.push(receiptInfo);
+      }
+      
+      const existingReceipts = request.receipts || [];
+      const allReceipts = [...existingReceipts, ...receiptUrls];
+      
+      const { error: updateError } = await supabase
+        .from('requisitions')
+        .update({
+          receipts: allReceipts,
+          receipts_count: allReceipts.length,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', requestId);
+      
+      if (updateError) throw new Error('Failed to update requisition');
+      
+      setRefreshKey(prev => prev + 1);
+      alert(`Successfully added ${receiptUrls.length} receipt(s)`);
+      return true;
+      
+    } catch (error) {
+      console.error('Error adding receipts:', error);
+      alert('Error adding receipts: ' + error.message);
+      return false;
+    } finally {
+      setProcessing(false);
+    }
   };
 
   const markAsCompleted = async (requestId, journalEntryNumber = null) => {
@@ -407,7 +470,7 @@ export default function RequisitionsPage() {
     if (error) {
       alert('Error marking as completed: ' + error.message);
     } else {
-      await fetchRequests();
+      setRefreshKey(prev => prev + 1);
       alert('Requisition marked as completed!');
     }
     setProcessing(false);
@@ -433,7 +496,7 @@ export default function RequisitionsPage() {
     if (error) {
       alert('Error rejecting requisition: ' + error.message);
     } else {
-      await fetchRequests();
+      setRefreshKey(prev => prev + 1);
       alert('Requisition rejected!');
     }
     setProcessing(false);
@@ -451,10 +514,10 @@ export default function RequisitionsPage() {
     return statusConfig[request.status] || { color: 'gray', icon: Clock, text: request.status, bg: 'bg-gray-50', textColor: 'text-gray-700', border: 'border-gray-200' };
   };
 
-  const canProcessPayment = (request) => {
-    // Since money is already received when creating, this should rarely be needed
+  const canUpdatePayment = (request) => {
     return isFinanceRole(userRole) && 
-           (request.status === 'Document Uploaded' || request.status === 'Payment Pending') &&
+           request.status !== 'Completed' && 
+           request.status !== 'Rejected' &&
            !request.payment_processed;
   };
 
@@ -497,14 +560,13 @@ export default function RequisitionsPage() {
                   </h1>
                   <p className="text-sm text-slate-500 mt-1 flex items-center gap-2">
                     <Receipt className="w-4 h-4 text-emerald-500" />
-                    Manage physical requisition forms with official stamps and receipts
+                    Manage physical requisition forms with official stamps
                   </p>
                 </div>
               </div>
             </div>
             
             <div className="flex gap-3">
-              {/* View Toggle */}
               <div className="flex bg-slate-100 rounded-xl p-1">
                 <button
                   onClick={() => setViewMode('table')}
@@ -520,7 +582,6 @@ export default function RequisitionsPage() {
                 </button>
               </div>
 
-              {/* New Requisition Button */}
               {isFinanceRole(userRole) && (
                 <button
                   onClick={() => setShowRequestModal(true)}
@@ -533,7 +594,6 @@ export default function RequisitionsPage() {
             </div>
           </div>
 
-          {/* User Role Banner */}
           <div className="mt-4 p-4 bg-gradient-to-r from-emerald-50 to-emerald-100/50 rounded-xl border border-emerald-200">
             <div className="flex items-center gap-3">
               <UserCircle className="w-8 h-8 text-emerald-600" />
@@ -543,7 +603,7 @@ export default function RequisitionsPage() {
                 </p>
                 <p className="text-xs text-emerald-600 mt-0.5">
                   {isFinanceRole(userRole) 
-                    ? 'You can add stamped requisitions with receipts, process payments, and mark as completed'
+                    ? 'You can add requisitions, update payment details, attach receipts, and mark as completed'
                     : 'You can only view requisitions'}
                 </p>
               </div>
@@ -572,6 +632,21 @@ export default function RequisitionsPage() {
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
             <div className="flex items-center justify-between">
               <div>
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Pending Payment</p>
+                <p className="text-3xl font-bold text-orange-600 mt-2">{stats.document_uploaded}</p>
+              </div>
+              <div className="p-3 bg-orange-100 rounded-xl">
+                <Clock className="w-6 h-6 text-orange-600" />
+              </div>
+            </div>
+            <div className="mt-3 pt-3 border-t border-slate-100">
+              <p className="text-xs text-slate-500">Awaiting payment details</p>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+            <div className="flex items-center justify-between">
+              <div>
                 <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Payment Processed</p>
                 <p className="text-3xl font-bold text-purple-600 mt-2">{stats.payment_processed}</p>
               </div>
@@ -580,22 +655,7 @@ export default function RequisitionsPage() {
               </div>
             </div>
             <div className="mt-3 pt-3 border-t border-slate-100">
-              <p className="text-xs text-slate-500">Payments already processed</p>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Pending Review</p>
-                <p className="text-3xl font-bold text-orange-600 mt-2">{stats.document_uploaded}</p>
-              </div>
-              <div className="p-3 bg-orange-100 rounded-xl">
-                <Clock className="w-6 h-6 text-orange-600" />
-              </div>
-            </div>
-            <div className="mt-3 pt-3 border-t border-slate-100">
-              <p className="text-xs text-slate-500">Awaiting payment verification</p>
+              <p className="text-xs text-slate-500">Payments completed</p>
             </div>
           </div>
 
@@ -682,13 +742,10 @@ export default function RequisitionsPage() {
             getPriorityConfig={getPriorityConfig} 
             setSelectedRequest={setSelectedRequest} 
             setShowDetailsModal={setShowDetailsModal} 
-            canProcessPayment={canProcessPayment}
+            canUpdatePayment={canUpdatePayment}
             canMarkCompleted={canMarkCompleted}
             isFinanceRole={isFinanceRole}
             userRole={userRole}
-            updatePaymentStatus={updatePaymentStatus}
-            markAsCompleted={markAsCompleted}
-            rejectRequisition={rejectRequisition}
           />
         ) : (
           <CardView 
@@ -698,13 +755,10 @@ export default function RequisitionsPage() {
             getPriorityConfig={getPriorityConfig} 
             setSelectedRequest={setSelectedRequest} 
             setShowDetailsModal={setShowDetailsModal} 
-            canProcessPayment={canProcessPayment}
+            canUpdatePayment={canUpdatePayment}
             canMarkCompleted={canMarkCompleted}
             isFinanceRole={isFinanceRole}
             userRole={userRole}
-            updatePaymentStatus={updatePaymentStatus}
-            markAsCompleted={markAsCompleted}
-            rejectRequisition={rejectRequisition}
           />
         )}
       </div>
@@ -726,29 +780,13 @@ export default function RequisitionsPage() {
           onClose={() => setShowDetailsModal(false)}
           userRole={userRole}
           isFinanceRole={isFinanceRole}
-          canProcessPayment={canProcessPayment(selectedRequest)}
+          canUpdatePayment={canUpdatePayment(selectedRequest)}
           canMarkCompleted={canMarkCompleted(selectedRequest)}
-          onProcessPayment={() => {
-            const ref = prompt('Enter payment reference number:', selectedRequest.payment_reference_number || '');
-            if (ref) {
-              updatePaymentStatus(selectedRequest.id, true, ref);
-            }
-            setShowDetailsModal(false);
-          }}
-          onMarkCompleted={() => {
-            const journalRef = prompt('Enter journal entry number:');
-            if (journalRef) {
-              markAsCompleted(selectedRequest.id, journalRef);
-            }
-            setShowDetailsModal(false);
-          }}
-          onReject={() => {
-            const reason = prompt('Please enter rejection reason:');
-            if (reason && reason.trim()) {
-              rejectRequisition(selectedRequest.id, reason);
-              setShowDetailsModal(false);
-            }
-          }}
+          onUpdatePayment={updatePaymentDetails}
+          onMarkCompleted={markAsCompleted}
+          onReject={rejectRequisition}
+          onAddReceipts={addReceiptsToRequisition}
+          processing={processing}
         />
       )}
     </div>
@@ -756,7 +794,7 @@ export default function RequisitionsPage() {
 }
 
 // Table View Component
-function TableView({ filteredRequests, loading, getStatusBadge, getPriorityConfig, setSelectedRequest, setShowDetailsModal, canProcessPayment, canMarkCompleted, isFinanceRole, userRole, updatePaymentStatus, markAsCompleted, rejectRequisition }) {
+function TableView({ filteredRequests, loading, getStatusBadge, getPriorityConfig, setSelectedRequest, setShowDetailsModal, canUpdatePayment, canMarkCompleted, isFinanceRole, userRole }) {
   return (
     <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
       <div className="overflow-x-auto">
@@ -767,26 +805,28 @@ function TableView({ filteredRequests, loading, getStatusBadge, getPriorityConfi
               <th className="text-left px-6 py-4 text-xs font-semibold text-slate-600 uppercase tracking-wider">Title & Details</th>
               <th className="text-left px-6 py-4 text-xs font-semibold text-slate-600 uppercase tracking-wider">Original Requester</th>
               <th className="text-right px-6 py-4 text-xs font-semibold text-slate-600 uppercase tracking-wider">Amount</th>
+              <th className="text-center px-6 py-4 text-xs font-semibold text-slate-600 uppercase tracking-wider">Payment</th>
+              <th className="text-center px-6 py-4 text-xs font-semibold text-slate-600 uppercase tracking-wider">Receipts</th>
               <th className="text-center px-6 py-4 text-xs font-semibold text-slate-600 uppercase tracking-wider">Status</th>
               <th className="text-center px-6 py-4 text-xs font-semibold text-slate-600 uppercase tracking-wider">Actions</th>
-            </tr>
+             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {loading ? (
               <tr>
-                <td colSpan="6" className="px-6 py-12 text-center">
+                <td colSpan="8" className="px-6 py-12 text-center">
                   <Loader2 className="w-8 h-8 animate-spin mx-auto text-emerald-600" />
                   <p className="text-sm text-slate-500 mt-3">Loading requisitions...</p>
-                </td>
-              </tr>
+                 </td>
+               </tr>
             ) : filteredRequests.length === 0 ? (
               <tr>
-                <td colSpan="6" className="px-6 py-12 text-center">
+                <td colSpan="8" className="px-6 py-12 text-center">
                   <FileText className="w-12 h-12 text-slate-300 mx-auto mb-3" />
                   <p className="text-slate-500">No requisitions found</p>
                   <p className="text-xs text-slate-400 mt-1">Try adjusting your filters or add a new stamped requisition</p>
-                </td>
-              </tr>
+                 </td>
+               </tr>
             ) : (
               filteredRequests.map((request) => {
                 const status = getStatusBadge(request);
@@ -800,7 +840,7 @@ function TableView({ filteredRequests, loading, getStatusBadge, getPriorityConfi
                       <span className="text-xs font-mono font-medium text-slate-600 bg-slate-100 px-2 py-1 rounded">
                         {request.requisition_number}
                       </span>
-                    </td>
+                     </td>
                     <td className="px-6 py-4">
                       <div>
                         <p className="text-sm font-semibold text-slate-800">{request.title}</p>
@@ -817,15 +857,9 @@ function TableView({ filteredRequests, loading, getStatusBadge, getPriorityConfi
                             <PriorityIcon className="w-3 h-3" />
                             {priorityConfig.label}
                           </span>
-                          {request.receipts_count > 0 && (
-                            <span className="inline-flex items-center gap-1 text-xs text-purple-600 bg-purple-50 px-2 py-0.5 rounded">
-                              <Receipt className="w-3 h-3" />
-                              {request.receipts_count} receipt(s)
-                            </span>
-                          )}
                         </div>
                       </div>
-                    </td>
+                     </td>
                     <td className="px-6 py-4">
                       <div>
                         <p className="text-sm font-medium text-slate-800">{request.original_requester_name || request.created_by_name}</p>
@@ -837,19 +871,45 @@ function TableView({ filteredRequests, loading, getStatusBadge, getPriorityConfi
                           </p>
                         )}
                       </div>
-                    </td>
+                     </td>
                     <td className="px-6 py-4 text-right">
                       <p className="text-sm font-bold text-emerald-600">UGX {request.amount?.toLocaleString()}</p>
-                      {request.payment_reference_number && (
-                        <p className="text-xs text-slate-400 mt-1">Ref: {request.payment_reference_number}</p>
+                     </td>
+                    <td className="px-6 py-4 text-center">
+                      {request.payment_processed ? (
+                        <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-medium bg-green-50 text-green-700">
+                          <CreditCard className="w-3.5 h-3.5" />
+                          Processed
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-medium bg-orange-50 text-orange-700">
+                          <Clock className="w-3.5 h-3.5" />
+                          Pending
+                        </span>
                       )}
-                    </td>
+                      {request.payment_reference_number && (
+                        <p className="text-xs text-slate-400 mt-1">{request.payment_reference_number}</p>
+                      )}
+                     </td>
+                    <td className="px-6 py-4 text-center">
+                      {request.receipts_count > 0 ? (
+                        <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-medium bg-blue-50 text-blue-700">
+                          <Receipt className="w-3.5 h-3.5" />
+                          {request.receipts_count}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-medium bg-slate-50 text-slate-500">
+                          <AlertCircle className="w-3.5 h-3.5" />
+                          None
+                        </span>
+                      )}
+                     </td>
                     <td className="px-6 py-4 text-center">
                       <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium ${status.bg} ${status.textColor} ${status.border} border`}>
                         <StatusIcon className="w-3.5 h-3.5" />
                         {status.text}
                       </span>
-                    </td>
+                     </td>
                     <td className="px-6 py-4 text-center">
                       <div className="flex items-center justify-center gap-2">
                         <button
@@ -862,51 +922,21 @@ function TableView({ filteredRequests, loading, getStatusBadge, getPriorityConfi
                         >
                           <Eye className="w-4 h-4" />
                         </button>
-                        
-                        {canMarkCompleted(request) && (
-                          <button
-                            onClick={() => {
-                              const journalRef = prompt('Enter journal entry number:');
-                              if (journalRef) {
-                                markAsCompleted(request.id, journalRef);
-                              }
-                            }}
-                            className="p-2 bg-green-100 text-green-700 hover:bg-green-200 rounded-lg transition-all"
-                            title="Mark as Completed"
-                          >
-                            <CheckCircle className="w-4 h-4" />
-                          </button>
-                        )}
-                        
-                        {isFinanceRole(userRole) && request.status !== 'Rejected' && request.status !== 'Completed' && (
-                          <button
-                            onClick={() => {
-                              const reason = prompt('Enter rejection reason:');
-                              if (reason) {
-                                rejectRequisition(request.id, reason);
-                              }
-                            }}
-                            className="p-2 bg-red-100 text-red-700 hover:bg-red-200 rounded-lg transition-all"
-                            title="Reject"
-                          >
-                            <XCircle className="w-4 h-4" />
-                          </button>
-                        )}
                       </div>
-                    </td>
-                  </tr>
+                     </td>
+                   </tr>
                 );
               })
             )}
           </tbody>
-        </table>
+         </table>
       </div>
     </div>
   );
 }
 
 // Card View Component
-function CardView({ filteredRequests, loading, getStatusBadge, getPriorityConfig, setSelectedRequest, setShowDetailsModal, canProcessPayment, canMarkCompleted, isFinanceRole, userRole, updatePaymentStatus, markAsCompleted, rejectRequisition }) {
+function CardView({ filteredRequests, loading, getStatusBadge, getPriorityConfig, setSelectedRequest, setShowDetailsModal, canUpdatePayment, canMarkCompleted, isFinanceRole, userRole }) {
   if (loading) {
     return (
       <div className="text-center py-12">
@@ -971,7 +1001,7 @@ function CardView({ filteredRequests, loading, getStatusBadge, getPriorityConfig
                   </span>
                 </div>
                 {request.receipts_count > 0 && (
-                  <div className="flex items-center gap-1 text-xs text-purple-600">
+                  <div className="flex items-center gap-1 text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded">
                     <Receipt className="w-3 h-3" />
                     <span>{request.receipts_count} receipt(s) attached</span>
                   </div>
@@ -994,12 +1024,6 @@ function CardView({ filteredRequests, loading, getStatusBadge, getPriorityConfig
                     Stamp Date: {new Date(request.stamp_received_date).toLocaleDateString()}
                   </p>
                 )}
-                {request.payment_reference_number && (
-                  <p className="text-xs text-slate-400 mt-1 flex items-center gap-1">
-                    <CreditCard className="w-3 h-3" />
-                    Payment Ref: {request.payment_reference_number}
-                  </p>
-                )}
               </div>
               
               <div className="flex items-center justify-end gap-2 mt-4 pt-3 border-t border-slate-100">
@@ -1012,34 +1036,6 @@ function CardView({ filteredRequests, loading, getStatusBadge, getPriorityConfig
                 >
                   View Details
                 </button>
-                
-                {canMarkCompleted(request) && (
-                  <button
-                    onClick={() => {
-                      const journalRef = prompt('Enter journal entry number:');
-                      if (journalRef) {
-                        markAsCompleted(request.id, journalRef);
-                      }
-                    }}
-                    className="px-3 py-1.5 text-sm bg-green-100 text-green-700 hover:bg-green-200 rounded-lg transition-all"
-                  >
-                    Mark Completed
-                  </button>
-                )}
-                
-                {isFinanceRole(userRole) && request.status !== 'Rejected' && request.status !== 'Completed' && (
-                  <button
-                    onClick={() => {
-                      const reason = prompt('Enter rejection reason:');
-                      if (reason) {
-                        rejectRequisition(request.id, reason);
-                      }
-                    }}
-                    className="px-3 py-1.5 text-sm bg-red-100 text-red-700 hover:bg-red-200 rounded-lg transition-all"
-                  >
-                    Reject
-                  </button>
-                )}
               </div>
             </div>
           </div>
@@ -1049,72 +1045,44 @@ function CardView({ filteredRequests, loading, getStatusBadge, getPriorityConfig
   );
 }
 
-// Requisition Modal Component with Receipt Upload
+// Requisition Modal Component (without payment details)
 function RequisitionModal({ onClose, onSubmit, processing, userName, userPosition }) {
   const [formData, setFormData] = useState({
-    // Basic info
     department: '',
     type: 'Expense',
     title: '',
     description: '',
     amount: '',
     priority: 'Medium',
-    
-    // Payment info (money already received)
-    payment_reference_number: '',
-    payment_method: 'transfer',
-    payment_notes: '',
-    
-    // Disbursement details
-    disbursement_method: 'cash',
-    disbursement_phone: '',
-    disbursement_bank_name: '',
-    disbursement_account_number: '',
-    disbursement_account_name: '',
-    
-    // Original requester
     original_requester_name: '',
     original_requester_position: '',
     original_requester_department: '',
     original_requester_signature_date: '',
-    
-    // Approvals from stamp
     supervisor_approved: false,
     supervisor_name: '',
     supervisor_position: '',
     supervisor_signature_date: '',
-    
     admin_approved: false,
     admin_name: '',
     admin_position: '',
     admin_signature_date: '',
-    
     finance_approved: false,
     finance_name: '',
     finance_position: '',
     finance_signature_date: '',
-    
-    // Stamp info
     stamp_received_date: new Date().toISOString().split('T')[0],
     stamp_reference_number: '',
     stamp_issuing_authority: 'Company Stamp',
-    
-    // Financial coding
     budget_code: '',
     cost_center: '',
     project_code: '',
     account_code: '',
-    
-    // Notes
     general_notes: '',
-    
-    // Metadata
     created_by_name: userName,
     created_by_position: userPosition
   });
   
   const [stampedDocument, setStampedDocument] = useState(null);
-  const [receipts, setReceipts] = useState([]);
   const [documentError, setDocumentError] = useState('');
   const [currentStep, setCurrentStep] = useState(1);
 
@@ -1137,36 +1105,6 @@ function RequisitionModal({ onClose, onSubmit, processing, userName, userPositio
     }
   };
 
-  const handleReceiptUpload = (e) => {
-    const files = Array.from(e.target.files);
-    const newReceipts = [];
-    const errors = [];
-    
-    files.forEach(file => {
-      if (file.size > 10 * 1024 * 1024) {
-        errors.push(`${file.name} is too large (max 10MB)`);
-      } else if (!['application/pdf', 'image/jpeg', 'image/png'].includes(file.type)) {
-        errors.push(`${file.name} has invalid format (use PDF, JPEG, or PNG)`);
-      } else {
-        newReceipts.push(file);
-      }
-    });
-    
-    if (errors.length > 0) {
-      alert(errors.join('\n'));
-    }
-    
-    if (newReceipts.length > 0) {
-      setReceipts([...receipts, ...newReceipts]);
-    }
-  };
-
-  const removeReceipt = (index) => {
-    const newReceipts = [...receipts];
-    newReceipts.splice(index, 1);
-    setReceipts(newReceipts);
-  };
-
   const removeDocument = () => {
     setStampedDocument(null);
     setDocumentError('');
@@ -1178,12 +1116,7 @@ function RequisitionModal({ onClose, onSubmit, processing, userName, userPositio
       return;
     }
     
-    if (!formData.payment_reference_number) {
-      alert('Please enter the payment reference number (money already received)');
-      return;
-    }
-    
-    onSubmit(formData, stampedDocument, receipts);
+    onSubmit(formData, stampedDocument);
   };
 
   return (
@@ -1196,7 +1129,7 @@ function RequisitionModal({ onClose, onSubmit, processing, userName, userPositio
             </div>
             <div>
               <h3 className="font-semibold text-slate-800">Add Stamped Requisition</h3>
-              <p className="text-xs text-slate-500 mt-0.5">Upload stamped form, payment proof, and receipts</p>
+              <p className="text-xs text-slate-500 mt-0.5">Upload stamped form (payment details can be added later)</p>
             </div>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100">
@@ -1204,17 +1137,16 @@ function RequisitionModal({ onClose, onSubmit, processing, userName, userPositio
           </button>
         </div>
         
-        {/* Steps */}
         <div className="px-6 pt-6">
           <div className="flex items-center justify-between mb-8">
-            {[1, 2, 3, 4, 5].map((step) => (
+            {[1, 2, 3].map((step) => (
               <div key={step} className="flex items-center flex-1">
                 <div className={`flex items-center justify-center w-10 h-10 rounded-full transition-all ${
                   currentStep >= step ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-500'
                 }`}>
                   {step}
                 </div>
-                {step < 5 && (
+                {step < 3 && (
                   <div className={`flex-1 h-0.5 mx-2 transition-all ${
                     currentStep > step ? 'bg-emerald-600' : 'bg-slate-200'
                   }`} />
@@ -1354,163 +1286,6 @@ function RequisitionModal({ onClose, onSubmit, processing, userName, userPositio
 
           {currentStep === 2 && (
             <div className="space-y-4">
-              <div className="bg-green-50 rounded-xl p-4 border border-green-200">
-                <div className="flex items-center gap-2 mb-3">
-                  <CreditCard className="w-5 h-5 text-green-600" />
-                  <h4 className="text-sm font-semibold text-green-800">Payment Information (Money Already Received)</h4>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">Payment Reference Number *</label>
-                    <input
-                      type="text"
-                      value={formData.payment_reference_number}
-                      onChange={(e) => setFormData({...formData, payment_reference_number: e.target.value})}
-                      className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                      placeholder="Bank ref, transaction ID, etc."
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">Payment Method</label>
-                    <select
-                      value={formData.payment_method}
-                      onChange={(e) => setFormData({...formData, payment_method: e.target.value})}
-                      className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                    >
-                      <option value="transfer">Bank Transfer</option>
-                      <option value="cash">Cash</option>
-                      <option value="mobile_money">Mobile Money</option>
-                      <option value="cheque">Cheque</option>
-                    </select>
-                  </div>
-                </div>
-                <div className="mt-3">
-                  <label className="block text-sm font-medium text-slate-700 mb-2">Payment Notes</label>
-                  <textarea
-                    value={formData.payment_notes}
-                    onChange={(e) => setFormData({...formData, payment_notes: e.target.value})}
-                    rows={2}
-                    className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                    placeholder="Additional payment details..."
-                  />
-                </div>
-              </div>
-
-              <div className="bg-blue-50 rounded-xl p-4 border border-blue-200">
-                <div className="flex items-center gap-2 mb-3">
-                  <Receipt className="w-5 h-5 text-blue-600" />
-                  <h4 className="text-sm font-semibold text-blue-800">Upload Receipts/Proof of Payment</h4>
-                </div>
-                
-                <div className="border-2 border-dashed border-blue-200 rounded-xl p-4 bg-blue-50/30">
-                  <div className="text-center">
-                    <Upload className="w-10 h-10 mx-auto text-blue-400 mb-2" />
-                    <p className="text-xs text-slate-600 mb-2">Upload receipts, invoices, or proof of payment</p>
-                    <div className="flex justify-center">
-                      <label className="cursor-pointer bg-blue-600 px-4 py-2 rounded-lg text-sm font-medium text-white hover:bg-blue-700 transition-colors">
-                        Upload Receipts
-                        <input
-                          type="file"
-                          className="hidden"
-                          accept=".pdf,.jpg,.jpeg,.png"
-                          multiple
-                          onChange={handleReceiptUpload}
-                        />
-                      </label>
-                    </div>
-                    <p className="text-xs text-slate-400 mt-2">PDF, JPEG, PNG up to 10MB each</p>
-                  </div>
-                </div>
-
-                {receipts.length > 0 && (
-                  <div className="mt-4 space-y-2">
-                    <p className="text-sm font-medium text-slate-700">Uploaded Receipts ({receipts.length})</p>
-                    {receipts.map((receipt, index) => (
-                      <div key={index} className="flex items-center justify-between p-2 bg-white rounded-lg border border-blue-200">
-                        <div className="flex items-center gap-2">
-                          <Image className="w-4 h-4 text-blue-600" />
-                          <span className="text-sm text-slate-700">{receipt.name}</span>
-                          <span className="text-xs text-slate-400">({(receipt.size / 1024).toFixed(2)} KB)</span>
-                        </div>
-                        <button
-                          onClick={() => removeReceipt(index)}
-                          className="p-1 text-red-500 hover:bg-red-50 rounded"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">Disbursement Method</label>
-                  <select
-                    value={formData.disbursement_method}
-                    onChange={(e) => setFormData({...formData, disbursement_method: e.target.value})}
-                    className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  >
-                    <option value="cash">Cash</option>
-                    <option value="bank">Bank Transfer</option>
-                    <option value="mobile">Mobile Money</option>
-                  </select>
-                </div>
-                {formData.disbursement_method === 'mobile' && (
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">Phone Number</label>
-                    <input
-                      type="tel"
-                      value={formData.disbursement_phone}
-                      onChange={(e) => setFormData({...formData, disbursement_phone: e.target.value})}
-                      className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                      placeholder="0712 345678"
-                    />
-                  </div>
-                )}
-              </div>
-
-              {formData.disbursement_method === 'bank' && (
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">Bank Name</label>
-                    <input
-                      type="text"
-                      value={formData.disbursement_bank_name}
-                      onChange={(e) => setFormData({...formData, disbursement_bank_name: e.target.value})}
-                      className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                      placeholder="Bank name"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">Account Number</label>
-                    <input
-                      type="text"
-                      value={formData.disbursement_account_number}
-                      onChange={(e) => setFormData({...formData, disbursement_account_number: e.target.value})}
-                      className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                      placeholder="Account number"
-                    />
-                  </div>
-                  <div className="col-span-2">
-                    <label className="block text-sm font-medium text-slate-700 mb-2">Account Name</label>
-                    <input
-                      type="text"
-                      value={formData.disbursement_account_name}
-                      onChange={(e) => setFormData({...formData, disbursement_account_name: e.target.value})}
-                      className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                      placeholder="Account holder name"
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {currentStep === 3 && (
-            <div className="space-y-4">
               <h4 className="text-sm font-semibold text-slate-800 mb-3 flex items-center gap-2">
                 <Users className="w-4 h-4 text-emerald-600" />
                 Original Requester (from physical document)
@@ -1562,14 +1337,13 @@ function RequisitionModal({ onClose, onSubmit, processing, userName, userPositio
             </div>
           )}
 
-          {currentStep === 4 && (
+          {currentStep === 3 && (
             <div className="space-y-4">
               <h4 className="text-sm font-semibold text-slate-800 mb-3 flex items-center gap-2">
                 <CheckSquare className="w-4 h-4 text-emerald-600" />
                 Approval Stamps (from physical document)
               </h4>
               
-              {/* Supervisor Approval */}
               <div className="border border-slate-200 rounded-xl p-4">
                 <div className="flex items-center gap-3 mb-3">
                   <input
@@ -1607,7 +1381,6 @@ function RequisitionModal({ onClose, onSubmit, processing, userName, userPositio
                 )}
               </div>
 
-              {/* Admin Approval */}
               <div className="border border-slate-200 rounded-xl p-4">
                 <div className="flex items-center gap-3 mb-3">
                   <input
@@ -1645,7 +1418,6 @@ function RequisitionModal({ onClose, onSubmit, processing, userName, userPositio
                 )}
               </div>
 
-              {/* Finance Approval */}
               <div className="border border-slate-200 rounded-xl p-4">
                 <div className="flex items-center gap-3 mb-3">
                   <input
@@ -1683,7 +1455,6 @@ function RequisitionModal({ onClose, onSubmit, processing, userName, userPositio
                 )}
               </div>
 
-              {/* Stamp Information */}
               <div className="border border-slate-200 rounded-xl p-4 mt-4">
                 <h4 className="text-sm font-medium text-slate-800 mb-3 flex items-center gap-2">
                   <Stamp className="w-4 h-4 text-emerald-600" />
@@ -1711,13 +1482,9 @@ function RequisitionModal({ onClose, onSubmit, processing, userName, userPositio
                   </div>
                 </div>
               </div>
-            </div>
-          )}
 
-          {currentStep === 5 && (
-            <div className="space-y-4">
-              <div className="bg-emerald-50 rounded-xl p-4">
-                <h4 className="text-sm font-semibold text-emerald-800 mb-3">Review Requisition Details</h4>
+              <div className="bg-emerald-50 rounded-xl p-4 mt-4">
+                <h4 className="text-sm font-semibold text-emerald-800 mb-3">Summary</h4>
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between py-2 border-b border-emerald-100">
                     <span className="text-emerald-700">Title:</span>
@@ -1727,32 +1494,16 @@ function RequisitionModal({ onClose, onSubmit, processing, userName, userPositio
                     <span className="text-emerald-700">Amount:</span>
                     <span className="font-bold text-emerald-900">UGX {parseInt(formData.amount || 0).toLocaleString()}</span>
                   </div>
-                  <div className="flex justify-between py-2 border-b border-emerald-100">
-                    <span className="text-emerald-700">Payment Reference:</span>
-                    <span className="font-medium text-emerald-900">{formData.payment_reference_number || 'Not specified'}</span>
-                  </div>
-                  <div className="flex justify-between py-2 border-b border-emerald-100">
-                    <span className="text-emerald-700">Original Requester:</span>
-                    <span className="font-medium text-emerald-900">{formData.original_requester_name || 'Not specified'}</span>
-                  </div>
-                  <div className="flex justify-between py-2 border-b border-emerald-100">
-                    <span className="text-emerald-700">Receipts:</span>
-                    <span className="font-medium text-emerald-900">{receipts.length} receipt(s) attached</span>
-                  </div>
-                  <div className="flex justify-between py-2 border-b border-emerald-100">
-                    <span className="text-emerald-700">Approvals:</span>
-                    <span className="font-medium text-emerald-900">
-                      {[
-                        formData.supervisor_approved && 'Supervisor',
-                        formData.admin_approved && 'Admin',
-                        formData.finance_approved && 'Finance'
-                      ].filter(Boolean).join(', ') || 'None'}
-                    </span>
-                  </div>
                   <div className="flex justify-between py-2">
                     <span className="text-emerald-700">Stamped Document:</span>
                     <span className="font-medium text-emerald-900">{stampedDocument ? stampedDocument.name : 'Not uploaded'}</span>
                   </div>
+                </div>
+                <div className="mt-3 pt-3 border-t border-emerald-200">
+                  <p className="text-xs text-emerald-600 flex items-center gap-1">
+                    <AlertCircle className="w-3 h-3" />
+                    Payment details and receipts can be added later from the requisition details page
+                  </p>
                 </div>
               </div>
             </div>
@@ -1768,7 +1519,7 @@ function RequisitionModal({ onClose, onSubmit, processing, userName, userPositio
               Back
             </button>
           )}
-          {currentStep < 5 ? (
+          {currentStep < 3 ? (
             <button
               onClick={() => setCurrentStep(currentStep + 1)}
               className="flex-1 bg-gradient-to-r from-emerald-600 to-emerald-700 text-white py-2.5 rounded-xl font-medium hover:from-emerald-700 hover:to-emerald-800 transition-all shadow-md"
@@ -1791,8 +1542,371 @@ function RequisitionModal({ onClose, onSubmit, processing, userName, userPositio
   );
 }
 
+// Payment Details Modal Component
+function PaymentDetailsModal({ request, onClose, onUpdatePayment, processing }) {
+  const [paymentData, setPaymentData] = useState({
+    payment_reference_number: '',
+    payment_method: 'transfer',
+    payment_notes: '',
+    disbursement_method: '',
+    disbursement_phone: '',
+    disbursement_bank_name: '',
+    disbursement_account_number: '',
+    disbursement_account_name: ''
+  });
+
+  const handleSubmit = async () => {
+    if (!paymentData.payment_reference_number) {
+      alert('Please enter payment reference number');
+      return;
+    }
+    if (!paymentData.disbursement_method) {
+      alert('Please select disbursement method');
+      return;
+    }
+    
+    const success = await onUpdatePayment(request.id, paymentData);
+    if (success) {
+      onClose();
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="sticky top-0 bg-white border-b border-slate-100 px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl">
+              <CreditCard className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-slate-800">Update Payment Details</h3>
+              <p className="text-xs text-slate-500 mt-0.5">For requisition: {request.requisition_number}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        
+        <div className="p-6 space-y-5">
+          <div className="bg-purple-50 rounded-xl p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <AlertCircle className="w-4 h-4 text-purple-600" />
+              <p className="text-sm text-purple-800">
+                Enter payment details for this requisition
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <h4 className="text-sm font-semibold text-slate-800 flex items-center gap-2">
+              <Banknote className="w-4 h-4 text-purple-600" />
+              Payment Information
+            </h4>
+            
+            <div className="grid grid-cols-2 gap-4">
+              <div className="col-span-2">
+                <label className="block text-sm font-medium text-slate-700 mb-2">Payment Reference Number *</label>
+                <input
+                  type="text"
+                  value={paymentData.payment_reference_number}
+                  onChange={(e) => setPaymentData({...paymentData, payment_reference_number: e.target.value})}
+                  className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  placeholder="Bank reference, transaction ID, etc."
+                  required
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">Payment Method</label>
+                <select
+                  value={paymentData.payment_method}
+                  onChange={(e) => setPaymentData({...paymentData, payment_method: e.target.value})}
+                  className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500"
+                >
+                  <option value="transfer">Bank Transfer</option>
+                  <option value="cash">Cash</option>
+                  <option value="mobile_money">Mobile Money</option>
+                  <option value="cheque">Cheque</option>
+                </select>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">Disbursement Method *</label>
+                <select
+                  value={paymentData.disbursement_method}
+                  onChange={(e) => setPaymentData({...paymentData, disbursement_method: e.target.value})}
+                  className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500"
+                >
+                  <option value="">Select Method</option>
+                  <option value="cash">Cash</option>
+                  <option value="bank">Bank Transfer</option>
+                  <option value="mobile">Mobile Money</option>
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">Payment Notes</label>
+              <textarea
+                value={paymentData.payment_notes}
+                onChange={(e) => setPaymentData({...paymentData, payment_notes: e.target.value})}
+                rows={3}
+                className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500"
+                placeholder="Additional payment details..."
+              />
+            </div>
+          </div>
+
+          {paymentData.disbursement_method === 'mobile' && (
+            <div className="space-y-4">
+              <h4 className="text-sm font-semibold text-slate-800 flex items-center gap-2">
+                <Wallet className="w-4 h-4 text-purple-600" />
+                Mobile Money Details
+              </h4>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">Phone Number</label>
+                <input
+                  type="tel"
+                  value={paymentData.disbursement_phone}
+                  onChange={(e) => setPaymentData({...paymentData, disbursement_phone: e.target.value})}
+                  className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  placeholder="0712 345678"
+                />
+              </div>
+            </div>
+          )}
+
+          {paymentData.disbursement_method === 'bank' && (
+            <div className="space-y-4">
+              <h4 className="text-sm font-semibold text-slate-800 flex items-center gap-2">
+                <Landmark className="w-4 h-4 text-purple-600" />
+                Bank Transfer Details
+              </h4>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">Bank Name</label>
+                  <input
+                    type="text"
+                    value={paymentData.disbursement_bank_name}
+                    onChange={(e) => setPaymentData({...paymentData, disbursement_bank_name: e.target.value})}
+                    className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    placeholder="Bank name"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">Account Number</label>
+                  <input
+                    type="text"
+                    value={paymentData.disbursement_account_number}
+                    onChange={(e) => setPaymentData({...paymentData, disbursement_account_number: e.target.value})}
+                    className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    placeholder="Account number"
+                  />
+                </div>
+                <div className="col-span-2">
+                  <label className="block text-sm font-medium text-slate-700 mb-2">Account Name</label>
+                  <input
+                    type="text"
+                    value={paymentData.disbursement_account_name}
+                    onChange={(e) => setPaymentData({...paymentData, disbursement_account_name: e.target.value})}
+                    className="w-full px-4 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    placeholder="Account holder name"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="sticky bottom-0 bg-slate-50 border-t border-slate-100 px-6 py-4 flex gap-3 rounded-b-2xl">
+          <button
+            onClick={onClose}
+            className="flex-1 px-4 py-2.5 border border-slate-200 rounded-xl text-slate-700 font-medium hover:bg-slate-50 transition-all"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={processing}
+            className="flex-1 bg-gradient-to-r from-purple-600 to-purple-700 text-white py-2.5 rounded-xl font-medium hover:from-purple-700 hover:to-purple-800 disabled:opacity-50 flex items-center justify-center gap-2 transition-all shadow-md"
+          >
+            {processing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+            {processing ? 'Saving...' : 'Save Payment Details'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Add Receipts Modal Component
+function AddReceiptsModal({ request, onClose, onAddReceipts, processing, setProcessing }) {
+  const [receipts, setReceipts] = useState([]);
+  const supabase = createClient();
+
+  const handleReceiptUpload = (e) => {
+    const files = Array.from(e.target.files);
+    const newReceipts = [];
+    const errors = [];
+    
+    files.forEach(file => {
+      if (file.size > 10 * 1024 * 1024) {
+        errors.push(`${file.name} is too large (max 10MB)`);
+      } else if (!['application/pdf', 'image/jpeg', 'image/png'].includes(file.type)) {
+        errors.push(`${file.name} has invalid format (use PDF, JPEG, or PNG)`);
+      } else {
+        newReceipts.push(file);
+      }
+    });
+    
+    if (errors.length > 0) {
+      alert(errors.join('\n'));
+    }
+    
+    if (newReceipts.length > 0) {
+      setReceipts([...receipts, ...newReceipts]);
+    }
+  };
+
+  const removeReceipt = (index) => {
+    const newReceipts = [...receipts];
+    newReceipts.splice(index, 1);
+    setReceipts(newReceipts);
+  };
+
+  const uploadReceipts = async () => {
+    if (receipts.length === 0) {
+      alert('Please select at least one receipt to upload');
+      return;
+    }
+
+    const success = await onAddReceipts(request.id, receipts);
+    if (success) {
+      onClose();
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl max-w-2xl w-full shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="border-b border-slate-100 px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl">
+              <Receipt className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-slate-800">Add Receipts</h3>
+              <p className="text-xs text-slate-500 mt-0.5">For requisition: {request.requisition_number}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        
+        <div className="p-6 space-y-4">
+          <div className="bg-blue-50 rounded-xl p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <AlertCircle className="w-4 h-4 text-blue-600" />
+              <p className="text-sm text-blue-800">
+                Upload receipts or proof of payment for this requisition
+              </p>
+            </div>
+          </div>
+
+          <div className="border-2 border-dashed border-blue-200 rounded-xl p-6 bg-blue-50/30">
+            <div className="text-center">
+              <Upload className="w-12 h-12 mx-auto text-blue-400 mb-3" />
+              <p className="text-sm text-slate-600 mb-2">Upload receipts, invoices, or proof of payment</p>
+              <div className="flex justify-center">
+                <label className="cursor-pointer bg-blue-600 px-4 py-2 rounded-lg text-sm font-medium text-white hover:bg-blue-700 transition-colors">
+                  Select Receipts
+                  <input
+                    type="file"
+                    className="hidden"
+                    accept=".pdf,.jpg,.jpeg,.png"
+                    multiple
+                    onChange={handleReceiptUpload}
+                  />
+                </label>
+              </div>
+              <p className="text-xs text-slate-400 mt-3">PDF, JPEG, PNG up to 10MB each</p>
+            </div>
+          </div>
+
+          {receipts.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-slate-700">Selected Receipts ({receipts.length})</p>
+              <div className="max-h-60 overflow-y-auto space-y-2">
+                {receipts.map((receipt, index) => (
+                  <div key={index} className="flex items-center justify-between p-3 bg-white rounded-lg border border-blue-200">
+                    <div className="flex items-center gap-3">
+                      <File className="w-5 h-5 text-blue-600" />
+                      <div>
+                        <p className="text-sm font-medium text-slate-800">{receipt.name}</p>
+                        <p className="text-xs text-slate-500">{(receipt.size / 1024).toFixed(2)} KB</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => removeReceipt(index)}
+                      className="p-1 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {request.receipts && request.receipts.length > 0 && (
+            <div className="border-t border-slate-200 pt-4 mt-2">
+              <p className="text-sm font-medium text-slate-700 mb-2">Existing Receipts ({request.receipts.length})</p>
+              <div className="max-h-40 overflow-y-auto space-y-2">
+                {request.receipts.map((receipt, index) => (
+                  <div key={index} className="flex items-center justify-between p-2 bg-slate-50 rounded-lg">
+                    <div className="flex items-center gap-2">
+                      <Receipt className="w-4 h-4 text-slate-500" />
+                      <span className="text-sm text-slate-600">{receipt.name}</span>
+                    </div>
+                    <a href={receipt.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-700">
+                      <Download className="w-4 h-4" />
+                    </a>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="border-t border-slate-100 px-6 py-4 flex gap-3">
+          <button
+            onClick={onClose}
+            className="flex-1 px-4 py-2.5 border border-slate-200 rounded-xl text-slate-700 font-medium hover:bg-slate-50 transition-all"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={uploadReceipts}
+            disabled={processing || receipts.length === 0}
+            className="flex-1 bg-gradient-to-r from-blue-600 to-blue-700 text-white py-2.5 rounded-xl font-medium hover:from-blue-700 hover:to-blue-800 disabled:opacity-50 flex items-center justify-center gap-2 transition-all shadow-md"
+          >
+            {processing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+            {processing ? 'Uploading...' : `Upload ${receipts.length} Receipt(s)`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Details Modal Component
-function DetailsModal({ request, onClose, userRole, isFinanceRole, canProcessPayment, canMarkCompleted, onProcessPayment, onMarkCompleted, onReject }) {
+function DetailsModal({ request, onClose, userRole, isFinanceRole, canUpdatePayment, canMarkCompleted, onUpdatePayment, onMarkCompleted, onReject, onAddReceipts, processing }) {
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [showReceiptsModal, setShowReceiptsModal] = useState(false);
+
   const downloadDocument = async (url, name) => {
     if (url) {
       window.open(url, '_blank');
@@ -1819,19 +1933,33 @@ function DetailsModal({ request, onClose, userRole, isFinanceRole, canProcessPay
         
         <div className="p-6 space-y-6">
           {/* Action Buttons */}
-          {(canProcessPayment || canMarkCompleted || isFinanceRole(userRole)) && (
-            <div className="flex gap-3 p-4 bg-slate-50 rounded-xl">
-              {canProcessPayment && (
+          {(canUpdatePayment || canMarkCompleted || isFinanceRole(userRole)) && (
+            <div className="flex gap-3 p-4 bg-slate-50 rounded-xl flex-wrap">
+              {canUpdatePayment && (
                 <button
-                  onClick={onProcessPayment}
+                  onClick={() => setShowPaymentModal(true)}
+                  className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm font-medium hover:bg-purple-700 transition-all flex items-center gap-2"
+                >
+                  <CreditCard className="w-4 h-4" /> Update Payment Details
+                </button>
+              )}
+              {isFinanceRole(userRole) && (
+                <button
+                  onClick={() => setShowReceiptsModal(true)}
                   className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-all flex items-center gap-2"
                 >
-                  <CreditCard className="w-4 h-4" /> Process Payment
+                  <Receipt className="w-4 h-4" /> Add Receipts
                 </button>
               )}
               {canMarkCompleted && (
                 <button
-                  onClick={onMarkCompleted}
+                  onClick={() => {
+                    const journalRef = prompt('Enter journal entry number:');
+                    if (journalRef) {
+                      onMarkCompleted(request.id, journalRef);
+                      onClose();
+                    }
+                  }}
                   className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 transition-all flex items-center gap-2"
                 >
                   <CheckCircle className="w-4 h-4" /> Mark Completed
@@ -1839,7 +1967,13 @@ function DetailsModal({ request, onClose, userRole, isFinanceRole, canProcessPay
               )}
               {isFinanceRole(userRole) && request.status !== 'Rejected' && request.status !== 'Completed' && (
                 <button
-                  onClick={onReject}
+                  onClick={() => {
+                    const reason = prompt('Please enter rejection reason:');
+                    if (reason && reason.trim()) {
+                      onReject(request.id, reason);
+                      onClose();
+                    }
+                  }}
                   className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 transition-all flex items-center gap-2"
                 >
                   <XCircle className="w-4 h-4" /> Reject
@@ -1886,7 +2020,7 @@ function DetailsModal({ request, onClose, userRole, isFinanceRole, canProcessPay
               <div className="bg-slate-50 rounded-xl p-4">
                 <h4 className="text-sm font-semibold text-slate-800 mb-3 flex items-center gap-2">
                   <Stamp className="w-4 h-4 text-emerald-600" />
-                  Original Requester (from physical document)
+                  Original Requester
                 </h4>
                 <div className="space-y-3">
                   <div>
@@ -1913,7 +2047,7 @@ function DetailsModal({ request, onClose, userRole, isFinanceRole, canProcessPay
               <div className="bg-slate-50 rounded-xl p-4">
                 <h4 className="text-sm font-semibold text-slate-800 mb-3 flex items-center gap-2">
                   <CheckSquare className="w-4 h-4 text-emerald-600" />
-                  Approval Stamps (from physical document)
+                  Approval Stamps
                 </h4>
                 <div className="space-y-2">
                   <div className="flex justify-between items-center py-1">
@@ -1961,12 +2095,26 @@ function DetailsModal({ request, onClose, userRole, isFinanceRole, canProcessPay
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-xs text-emerald-700">Payment Status</span>
-                    <span className="text-sm font-medium text-green-600">✓ Payment Processed</span>
+                    <span className={`text-sm font-medium ${request.payment_processed ? 'text-green-600' : 'text-orange-600'}`}>
+                      {request.payment_processed ? '✓ Processed' : '⏳ Pending'}
+                    </span>
                   </div>
                   {request.payment_reference_number && (
                     <div className="flex justify-between items-center">
                       <span className="text-xs text-emerald-700">Payment Reference</span>
                       <span className="text-sm font-mono text-emerald-800">{request.payment_reference_number}</span>
+                    </div>
+                  )}
+                  {request.payment_method && (
+                    <div className="flex justify-between items-center">
+                      <span className="text-xs text-emerald-700">Payment Method</span>
+                      <span className="text-sm text-emerald-800 capitalize">{request.payment_method}</span>
+                    </div>
+                  )}
+                  {request.disbursement_method && (
+                    <div className="flex justify-between items-center">
+                      <span className="text-xs text-emerald-700">Disbursement</span>
+                      <span className="text-sm text-emerald-800 capitalize">{request.disbursement_method}</span>
                     </div>
                   )}
                   {request.payment_processed_at && (
@@ -1988,7 +2136,7 @@ function DetailsModal({ request, onClose, userRole, isFinanceRole, canProcessPay
                 <div className="bg-slate-50 rounded-xl p-4">
                   <h4 className="text-sm font-semibold text-slate-800 mb-3 flex items-center gap-2">
                     <Receipt className="w-4 h-4 text-emerald-600" />
-                    Receipts & Proof of Payment ({request.receipts.length})
+                    Receipts ({request.receipts.length})
                   </h4>
                   <div className="space-y-2">
                     {request.receipts.map((receipt, index) => (
@@ -2042,6 +2190,27 @@ function DetailsModal({ request, onClose, userRole, isFinanceRole, canProcessPay
           </button>
         </div>
       </div>
+
+      {/* Payment Details Modal */}
+      {showPaymentModal && (
+        <PaymentDetailsModal
+          request={request}
+          onClose={() => setShowPaymentModal(false)}
+          onUpdatePayment={onUpdatePayment}
+          processing={processing}
+        />
+      )}
+
+      {/* Add Receipts Modal */}
+      {showReceiptsModal && (
+        <AddReceiptsModal
+          request={request}
+          onClose={() => setShowReceiptsModal(false)}
+          onAddReceipts={onAddReceipts}
+          processing={processing}
+          setProcessing={() => {}}
+        />
+      )}
     </div>
   );
 }
